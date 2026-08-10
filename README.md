@@ -8,7 +8,11 @@
 
 by: Brandon Chaney
 
+## Overview
 
+This writeup demonstrates the exploitation and privilege escalation of the Connected Hack The Box machine. The attack begins with FreePBX enumeration and an unauthenticated SQL injection that provides remote code execution as the asterisk user. Further enumeration reveals a misconfigured incrond rule and writable configuration file, which can be abused to execute commands as root.
+
+> Using FreePBX SQL injection, Meterpreter, Linux enumeration, incrond, and a writable DAHDI configuration, this machine demonstrates how chained misconfigurations can turn an initial low-privileged foothold into full root access.
 
 ## Enumeration
 
@@ -348,3 +352,17 @@ The reverse shell connected back to my attacking machine with root privileges, a
 ```bash
 [root@connected root]#
 ```
+
+## Key Findings
+- Unauthenticated SQL injection in FreePBX can provide an initial foothold and remote code execution.
+- Local enumeration is critical for identifying privilege escalation opportunities after gaining access.
+- Misconfigured incrond jobs can allow low-privileged users to influence processes executed as root.
+- Writable configuration files sourced by privileged processes can lead to arbitrary command execution.
+- Chaining multiple misconfigurations can turn a limited asterisk foothold into full root access.
+
+## Resources
+- https://github.com/FreePBX/security-reporting/security/advisories
+- https://www.rapid7.com/db/modules/exploit/unix/http/freepbx_unauth_sqli_to_rce/
+- https://linux.die.net/man/8/incrond
+- https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/unix/http/freepbx_unauth_sqli_to_rce.rb
+- https://www.cve.org/CVERecord?id=CVE-2025-57819
