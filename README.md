@@ -24,20 +24,29 @@ PORT    STATE SERVICE  VERSION
 443/tcp open  ssl/http Apache httpd 2.4.6 ((CentOS) OpenSSL/1.0.2k-fips PHP/7.4.16)
 ```
 
+<p align="center">
+  <img src="images/image4.png"/>
+  <br/>
+  <em>FreePBX Enumeration: Identifying the Installed Version 16.0.40.7</em>
+</p>
+
 The web server appeared to be running a vulnerable version of FreePBX, so I began researching known vulnerabilities affecting the installed components.
-
-
-
 
 ## Vulnerability Research
 
-Research into the identified FreePBX version revealed two critical vulnerabilities worth investigating.
+Research into the identified FreePBX version, `Version 16.0.40.7`, revealed two critical vulnerabilities worth investigating.
+
+<p align="center">
+  <img src="images/image1.png"/>
+  <br/>
+  <em>FreePBX Enumeration: Identifying Two Critical Security Advisories</em>
+</p>
 
 ### 1. FreePBX UCP Socket.IO Authentication Bypass
 
 The first vulnerability involved unauthenticated remote code execution through the FreePBX User Control Panel (UCP). The UCP Node server listens on ports 8001 and 8003 by default and uses an authentication guard for Socket.IO connections.
 
-Due to changes in Socket.IO, this authentication mechanism could potentially be bypassed, allowing an unauthenticated client to send crafted events to the Asterisk Manager Interface (AMI) and execute commands as the `asterisk` user.
+> Due to changes in Socket.IO, this authentication mechanism could potentially be bypassed, allowing an unauthenticated client to send crafted events to the Asterisk Manager Interface (AMI) and execute commands as the `asterisk` user.
 
 ### 2. FreePBX MissedCall SQL Injection
 
@@ -268,7 +277,11 @@ Since incrond was running as root, I investigated what this script executed.
 
 The resulting chain was:
 
-asterisk │ │ writes to dahdi_restart ▼ incrond detects IN_CLOSE_WRITE │ ▼ /usr/sbin/sysadmin_dahdi_restart │ ▼ /etc/init.d/dahdi restart │ ▼ sources /etc/dahdi/init.conf │ ▼ commands in init.conf execute as root
+1. `asterisk` - Writes to dahdi_restart
+2. `incrond` ─ Detects IN_CLOSE_WRITE
+3. `/usr/sbin/sysadmin_dahdi_restart` - Executes /etc/init.d/dahdi restart
+4. `/etc/init.d/dahdi` - Sources /etc/dahdi/init.conf
+5. `/etc/dahdi/init.conf` - Commands execute as root
 
 At this point, the important question was whether asterisk could modify anything within that chain.
 
@@ -289,11 +302,11 @@ total 40
 -rw-r--r--. 1 asterisk asterisk 11673 Jun  5  2023 system.conf.sample
 ```
 
-> The init.conf file was owned by asterisk, meaning the current user could modify it.
+> The `init.conf` file was owned by asterisk, meaning the current user could modify it.
 
-The file was not executed directly by asterisk. Instead, /etc/init.d/dahdi sourced it during the restart process.
+The file was not executed directly by asterisk. Instead, `/etc/init.d/dahdi` sourced it during the restart process.
 
-Because the restart was triggered by incrond running as root, any commands placed in init.conf would execute within the root-owned dahdi restart process.
+Because the restart was triggered by incrond running as `root`, any commands placed in `init.conf` would execute within the root-owned dahdi restart process.
 
 This connected the two findings:
 
@@ -303,7 +316,7 @@ Root-triggered DAHDI restart
        =
 Root command execution
 
-The dahdi_restart incron rule therefore provided the trigger, while the writable /etc/dahdi/init.conf provided the location for commands to execute with root privileges.
+> The dahdi_restart incron rule therefore provided the trigger, while the writable `/etc/dahdi/init.conf` provided the location for commands to execute with root privileges.
 
 
 ## Exploitation
@@ -328,26 +341,10 @@ Finally, I triggered the incron rule by writing to the monitored file:
 echo "restart" > /var/spool/asterisk/sysadmin/dahdi_restart
 ```
 
-Writing and closing the file generated the required IN_CLOSE_WRITE event.
+Writing and closing the file generated the required `IN_CLOSE_WRITE` event.
 
-The execution chain was triggered:
-
-[![Trigger](https://img.shields.io/badge/Trigger-IN__CLOSE__WRITE-blue)](#)
-&nbsp;→&nbsp;
-[![Monitor](https://img.shields.io/badge/Monitor-incrond-orange)](#)
-&nbsp;→&nbsp;
-[![Script](https://img.shields.io/badge/Script-sysadmin__dahdi__restart-yellow)](#)
-&nbsp;→&nbsp;
-[![Restart](https://img.shields.io/badge/Restart-dahdi__restart-red)](#)
-&nbsp;→&nbsp;
-[![Config](https://img.shields.io/badge/Config-init.conf-purple)](#)
-&nbsp;→&nbsp;
-[![Result](https://img.shields.io/badge/Result-Reverse__Shell-success)](#)
-
-The reverse shell connected back to my attacking machine with root privileges.
+The reverse shell connected back to my attacking machine with root privileges, and I was able to successfully escalate from the `asterisk` user to `root`.
 
 ```bash
 [root@connected root]#
 ```
-
-I had successfully escalated from the asterisk user to root.
