@@ -1,8 +1,9 @@
-# Connected - Hack The Box Writeup
-![Status](https://img.shields.io/badge/Status-Complete-brightgreen)
+<img src="images/connected.png" alt="Machine icon" width="110" />
+
+# Connected - Hack The Box Machine Writeup
 ![Hack The Box](https://img.shields.io/badge/Hack%20The%20Box-Connected-9FEF00?logo=hackthebox&logoColor=black)
-![SQL Injection](https://img.shields.io/badge/SQL%20Injection-Initial%20Access-red)
-![Privilege Escalation](https://img.shields.io/badge/Linux-Privilege%20Escalation-blue)
+![Difficulty](https://img.shields.io/badge/Difficulty-Easy-2EA44F)
+![Category](https://img.shields.io/badge/Category-Linux-2496ED)
 
 *A penetration testing walkthrough demonstrating FreePBX exploitation, remote code execution, and Linux privilege escalation.*
 
